@@ -2,8 +2,6 @@
 
 An affordability check that runs before the money is gone.
 
-Built for the Standard Bank PPB Technology Graduate Programme assessment,
-Digital Platforms.
 
 ## The problem
 
