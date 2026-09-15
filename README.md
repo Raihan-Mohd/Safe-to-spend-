@@ -48,8 +48,9 @@ while the balance was still R496 in credit.
 python3 safe_to_spend.py
 ```
 
-No dependencies. Python standard library only. It prints the month to the
-console and writes `index.html`, a phone-styled view of the same results.
+One import from the Python standard library (`json`). No external
+dependencies. It prints the month to the console and writes `index.html`, a
+phone-styled view of the same results.
 
 `index.html` is generated output but is committed so the page can be served
 directly. Re-running the script overwrites it.
@@ -137,8 +138,8 @@ specification, including the function names and signatures, before any code
 existed.
 
 I then used Claude Code to write the Python from that specification, and to
-help with converting the supplied spreadsheet into the flat file the program
-reads, and with the styling of the generated page.
+help with loading the bank's statement directly from its original JSON file,
+and with the styling of the generated page.
 
 I verified the output against figures I had calculated independently from the
 data. That caught something the generated code got wrong: a notification that
@@ -156,5 +157,5 @@ I also used AI to create this README as it can format it to my liking very easil
 | File | |
 |---|---|
 | `safe_to_spend.py` | The whole program |
-| `transactions.txt` | The supplied data, converted to a pipe-delimited flat file |
+| `transactions.json` | The bank's statement data in its original JSON format |
 | `index.html` | Generated output, committed so it can be served |

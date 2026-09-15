@@ -1,3 +1,5 @@
+import json
+
 INCOME = "Income / Salary"
 FIXED_COMMITMENTS = "Fixed Commitments"
 DEBIT_ORDER = "Debit Order"
@@ -11,20 +13,16 @@ MONTH_NAMES = {
 
 
 def load_transactions(path):
-    transactions = []
     with open(path, "r") as file:
-        lines = file.readlines()
-    for line in lines[1:]:
-        line = line.strip()
-        if line == "":
-            continue
-        fields = line.split("|")
+        data = json.load(file)
+    transactions = []
+    for line in data["statementLines"]:
         transaction = {
-            "posting_date": fields[0],
-            "amount": float(fields[1]),
-            "category": fields[2],
-            "narrative": fields[3],
-            "running_balance": float(fields[4]),
+            "posting_date": line["postingDate"][:10],
+            "amount": float(line["amount"]["amount"]),
+            "category": line["transactionCategory"]["transactionCategoryName"],
+            "narrative": line["narrative"],
+            "running_balance": float(line["runningBalance"]["amount"]),
         }
         transactions.append(transaction)
     return transactions
@@ -697,6 +695,6 @@ def write_html(transactions, results):
 
 
 if __name__ == "__main__":
-    transactions = load_transactions("transactions.txt")
+    transactions = load_transactions("transactions.json")
     results = run_month(transactions)
     write_html(transactions, results)
