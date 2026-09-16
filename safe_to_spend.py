@@ -1,10 +1,17 @@
 import json
 
+# Transaction category names as they appear in the bank's JSON export -
+# used to classify each transaction when building the budget.
 INCOME = "Income / Salary"
 FIXED_COMMITMENTS = "Fixed Commitments"
 DEBIT_ORDER = "Debit Order"
 TRANSFERS = "Transfers"
+
+# Percentage-of-budget-spent milestones that trigger a notification.
 THRESHOLDS = [50, 75, 90, 95]
+
+# Maps the two-digit month from a "YYYY-MM-DD" date string to its full name,
+# used when formatting dates for display in the HTML report.
 MONTH_NAMES = {
     "01": "January", "02": "February", "03": "March", "04": "April",
     "05": "May", "06": "June", "07": "July", "08": "August",
@@ -13,12 +20,14 @@ MONTH_NAMES = {
 
 
 def load_transactions(path):
+    # Read the raw bank statement JSON from disk and pull out only the
+    # fields this script actually needs, in a simpler flat dict per line.
     with open(path, "r") as file:
         data = json.load(file)
     transactions = []
     for line in data["statementLines"]:
         transaction = {
-            "posting_date": line["postingDate"][:10],
+            "posting_date": line["postingDate"][:10],  # keep just the YYYY-MM-DD part
             "amount": float(line["amount"]["amount"]),
             "category": line["transactionCategory"]["transactionCategoryName"],
             "narrative": line["narrative"],
@@ -29,6 +38,8 @@ def load_transactions(path):
 
 
 def calculate_budget(transactions):
+    # Work out how much is actually "safe to spend" for the month: total
+    # salary in, minus everything already committed to fixed bills/debit orders.
     salary = 0.0
     commitments = 0.0
     for transaction in transactions:
@@ -43,6 +54,7 @@ def calculate_budget(transactions):
 
 
 def counts_as_spending(transaction):
+    # Decide whether a transaction should eat into the remaining budget.
     # commitments are already removed from the budget up front, so they
     # must not be counted again as the month's spending drains the budget
     if transaction["category"] in (INCOME, FIXED_COMMITMENTS, DEBIT_ORDER):
@@ -54,6 +66,8 @@ def counts_as_spending(transaction):
 
 
 def commitments_still_due(transactions, date):
+    # Sum up the fixed commitments/debit orders that haven't posted yet as of
+    # `date`, so a notification can warn the customer about bills still coming.
     total = 0.0
     posted = 0.0
     for transaction in transactions:
@@ -70,9 +84,13 @@ def format_rand(amount):
 
 
 def build_notification_message(level, amount_left, commitments_due):
+    # Pick the wording for the notification based on which spending
+    # threshold (50/75/90/95%) was just crossed.
     if level == 50:
         return f"You have used half your spending money. {format_rand(amount_left)} left until payday."
     if level == 75:
+        # checking whether every commitment for the month has already posted,
+        # so we don't warn about bills that are already paid
         if commitments_due == 0:
             return f"{format_rand(amount_left)} left. All your commitments for this month are already paid."
         return f"{format_rand(amount_left)} left. {format_rand(commitments_due)} is still due for commitments before your next salary."
@@ -83,6 +101,13 @@ def build_notification_message(level, amount_left, commitments_due):
 
 
 def run_month(transactions):
+    # transactions is a list of dicts (one record per transaction). This
+    # function steps through them in order, tracks how much has been spent,
+    # prints a line per transaction, and fires a notification each time
+    # spending crosses 50%/75%/90%/95% of the budget.
+
+    # calculate_budget (above) returns three numbers at once: salary in,
+    # commitments already accounted for, and budget = what's free to spend.
     salary, total_commitments, budget = calculate_budget(transactions)
 
     print(f"Salary: R{salary:.2f}")
@@ -90,45 +115,61 @@ def run_month(transactions):
     print(f"Budget: R{budget:.2f}")
     print("")
 
+    # `sent` is a dict (lookup table) recording which thresholds have
+    # already notified this month, so each one only fires once.
     sent = {}
     for threshold in THRESHOLDS:
         sent[threshold] = False
 
-    running_total = 0.0
+    # Running totals that build up as we go through the transactions below.
+    running_total = 0.0  # total spent so far this month
     notifications_sent = 0
     last_notification_date = None
     last_notification_amount_left = None
-    first_negative_date = None
+    first_negative_date = None  # first day the balance went below 0
     notifications = []
     percent_used = 0.0
 
+    # Loop: repeats once per transaction, oldest to newest.
     for transaction in transactions:
+        # Income, commitments, and self-transfers to savings don't count as
+        # spending (counts_as_spending, above); everything else adds to the
+        # total (amounts are negative for money out, so we flip the sign).
         if counts_as_spending(transaction):
             running_total += -transaction["amount"]
 
+        # Recalculate the running percentage after every transaction.
         percent_used = running_total / budget * 100
 
+        # Print one ledger line for this transaction.
         date = transaction["posting_date"]
         narrative = transaction["narrative"]
         amount = transaction["amount"]
         print(f"{date}  {narrative:<40}  {amount:>10.2f}  {percent_used:5.1f}%")
 
+        # Record only the first time the balance dips below zero.
         if transaction["running_balance"] < 0 and first_negative_date is None:
             first_negative_date = date
 
+        # Collect any thresholds this transaction just crossed for the
+        # first time (usually none, sometimes one, rarely more than one).
         newly_crossed = []
         for threshold in THRESHOLDS:
             if percent_used >= threshold and not sent[threshold]:
                 newly_crossed.append(threshold)
 
         if len(newly_crossed) > 0:
+            # If more than one was crossed at once, only notify the highest.
             highest = max(newly_crossed)
+            # Build and print the notification message.
             amount_left = budget - running_total
             commitments_due = commitments_still_due(transactions, date)
             message = build_notification_message(highest, amount_left, commitments_due)
             print(f"    >> {message}")
             notifications.append({"date": date, "level": highest, "message": message})
 
+            # Mark every crossed threshold as sent, not just the highest,
+            # so a skipped-over one doesn't fire retroactively later.
             for threshold in newly_crossed:
                 sent[threshold] = True
 
@@ -136,17 +177,22 @@ def run_month(transactions):
             last_notification_date = date
             last_notification_amount_left = amount_left
 
+    # Loop done - print a short summary of the whole month.
     print("")
     print(f"Notifications sent: {notifications_sent}")
+    # checking if any notification was actually sent before printing details about it
     if last_notification_date is not None:
         print(f"Last notification: {last_notification_date} - R{last_notification_amount_left:.2f} left")
     else:
         print("Last notification: none")
+    # checking if the balance ever went negative this month before reporting the date
     if first_negative_date is not None:
         print(f"Balance first went negative on: {first_negative_date}")
     else:
         print("Balance first went negative on: never")
 
+    # Return the results as a dict so the calling code further down the
+    # file can use them to build the HTML report.
     return {
         "salary": salary,
         "total_commitments": total_commitments,
@@ -159,16 +205,19 @@ def run_month(transactions):
 
 
 def format_date_long(date_string):
+    # Turn "YYYY-MM-DD" into a display form like "5 September" for the report.
     _, month, day = date_string.split("-")
     return f"{int(day)} {MONTH_NAMES[month]}"
 
 
 def format_month_year(date_string):
+    # Turn "YYYY-MM-DD" into a display form like "September 2026" for the report heading.
     year, month, day = date_string.split("-")
     return f"{MONTH_NAMES[month]} {year}"
 
 
 def progress_bar_colour(percent_used):
+    # Picks the progress bar's colour based on how much of the budget is used.
     # traffic-light colours so the customer can tell their spending pace at a glance
     if percent_used < 75:
         return "#0A33B0"
@@ -178,6 +227,7 @@ def progress_bar_colour(percent_used):
 
 
 def notification_title(level):
+    # Maps a crossed threshold level (50/75/90/95) to the heading shown for that notification.
     if level == 50:
         return "Halfway through your budget"
     if level == 75:
@@ -188,6 +238,7 @@ def notification_title(level):
 
 
 def notification_badge_colour(level):
+    # Maps a crossed threshold level to the colour of its badge in the report.
     if level == 50:
         return "#0A33B0"
     if level == 75:
@@ -198,6 +249,7 @@ def notification_badge_colour(level):
 
 
 def find_overdraw_fee(transactions):
+    # Look up the low-balance notice fee transaction, if one was charged.
     # the notice fee is a real posted transaction, not a typed-in figure
     for transaction in transactions:
         if "OVERDRAWN" in transaction["narrative"]:
@@ -206,11 +258,15 @@ def find_overdraw_fee(transactions):
 
 
 def write_html(transactions, results):
+    # Build a mobile-app-style HTML report summarising the month's budget,
+    # notifications, and any overdraft impact, then write it to index.html.
     month_label = format_month_year(transactions[0]["posting_date"])
     spendable = results["budget"]
     left_to_spend = results["budget"] - results["spent_so_far"]
     percent_used = results["final_percent_used"]
     bar_width = percent_used
+    # checking so the progress bar never renders wider than 100%, even if
+    # spending actually went over budget
     if bar_width > 100:
         bar_width = 100
     bar_colour = progress_bar_colour(percent_used)
@@ -221,6 +277,8 @@ def write_html(transactions, results):
     notification_rows = ""
     for index, notification in enumerate(results["notifications"]):
         badge_colour = notification_badge_colour(notification["level"])
+        # checking whether this row should be visible up front or hidden
+        # behind the "show all" link
         row_class = "row" if index < visible_count else "row hidden-row"
         notification_rows += f"""
         <div class="{row_class}">
@@ -233,12 +291,16 @@ def write_html(transactions, results):
         </div>"""
 
     show_all_link = ""
+    # checking if there are more notifications than the visible_count limit
+    # before bothering to render the "show all" link at all
     if len(results["notifications"]) > visible_count:
         show_all_link = """
         <a class="show-all" id="your-month-show-all" onclick="showAllRows('your-month'); return false;" href="#">Show all</a>"""
 
     overdraw_section = ""
     overdraw_fee = find_overdraw_fee(transactions)
+    # only show the "what actually happened" overdraft section if the balance
+    # actually went negative and we found a matching fee transaction for it
     if results["first_negative_date"] is not None and overdraw_fee is not None:
         overdraw_date = format_date_long(results["first_negative_date"])
         fee_amount = format_rand(-overdraw_fee["amount"])
@@ -255,6 +317,10 @@ def write_html(transactions, results):
             </div>
         </div>"""
 
+    # The rest of this function is a single HTML template made up of a phone
+    # status bar, a "Safe to Spend" header, a balance/progress summary, a
+    # list of notifications, an optional overdraft section, and a bottom nav
+    # bar - styled to look like a mobile banking app screen.
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -695,6 +761,8 @@ def write_html(transactions, results):
 
 
 if __name__ == "__main__":
+    # Load the month's transactions, run the budget/notification logic over
+    # them, and write the resulting summary out as an HTML report.
     transactions = load_transactions("transactions.json")
     results = run_month(transactions)
     write_html(transactions, results)
